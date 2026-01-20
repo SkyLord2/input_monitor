@@ -289,7 +289,7 @@ impl ManualPropertyHandler {
         property_id: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
         new_value: MaybeUninit<VARIANT>,
     ) -> HRESULT {
-        println!("    [属性变更] 属性ID: {:?}", property_id);
+        // println!("    [属性变更] 属性ID: {:?}", property_id);
         if property_id == UIA_ValueValuePropertyId && !sender.is_null() {
             unsafe {
                 let element: &IUIAutomationElement = std::mem::transmute(&sender);
@@ -307,10 +307,12 @@ impl ManualPropertyHandler {
 
                         let name = element.CurrentName().unwrap_or(BSTR::new());
                         if element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool() {
-                            debounce_print(format!(
-                                "    [输入监测] 控件类型: {:?}, '{}' 变更为: {}",
-                                control_type, name, current_text
-                            ));
+                            if !current_text.is_empty() {
+                                debounce_print(format!(
+                                    "    [输入监测] 控件类型: {:?}, '{}' 变更为: {}",
+                                    control_type, name, current_text
+                                ));
+                            }
                         }
                     }
                 }
