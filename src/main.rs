@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -34,6 +36,13 @@ thread_local! {
 }
 
 const MAX_TEXT_LEN: i32 = 4096;
+const DEBOUNCE_MS: u64 = 200;
+
+struct DebounceEvent {
+    message: String,
+}
+
+static DEBOUNCE_SENDER: OnceLock<Sender<DebounceEvent>> = OnceLock::new();
 
 fn main() -> Result<()> {
     unsafe {
@@ -298,7 +307,10 @@ impl ManualPropertyHandler {
 
                         let name = element.CurrentName().unwrap_or(BSTR::new());
                         if element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool() {
-                            println!("    [输入监测] 控件类型: {:?}, '{}' 变更为: {}", control_type, name, current_text);
+                            debounce_print(format!(
+                                "    [输入监测] 控件类型: {:?}, '{}' 变更为: {}",
+                                control_type, name, current_text
+                            ));
                         }
                     }
                 }
@@ -386,6 +398,34 @@ fn get_text_deep(element: &IUIAutomationElement) -> Result<String> {
     })
 }
 
+fn debounce_print(message: String) {
+    let sender = DEBOUNCE_SENDER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<DebounceEvent>();
+        thread::spawn(move || debounce_worker(rx));
+        tx
+    });
+    let _ = sender.send(DebounceEvent { message });
+}
+
+fn debounce_worker(rx: mpsc::Receiver<DebounceEvent>) {
+    loop {
+        let mut last = match rx.recv() {
+            Ok(ev) => ev,
+            Err(_) => return,
+        };
+        loop {
+            match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
+                Ok(ev) => last = ev,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    println!("{}", last.message);
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+}
+
 #[repr(C)]
 struct ManualTextChangedHandler {
     vtable: *const IUIAutomationEventHandler_Vtbl,
@@ -467,7 +507,10 @@ impl ManualTextChangedHandler {
                 if let Ok(text) = get_text_deep(element) {
                     if !text.is_empty() {
                         let name = element.CurrentName().unwrap_or(BSTR::new());
-                        println!("    [输入监测] (TextChanged) {:?}, '{}' 变更为: {}", control_type, name, text);
+                        debounce_print(format!(
+                            "    [输入监测] (TextChanged) {:?}, '{}' 变更为: {}",
+                            control_type, name, text
+                        ));
                     }
                 }
             }
