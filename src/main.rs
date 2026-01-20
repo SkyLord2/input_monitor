@@ -21,14 +21,19 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationFocusChangedEventHandler_Vtbl, IUIAutomationPropertyChangedEventHandler,
     IUIAutomationPropertyChangedEventHandler_Vtbl, IUIAutomationValuePattern,
     IUIAutomationCondition,
+    IUIAutomationEventHandler, IUIAutomationEventHandler_Vtbl,
     TreeScope_Descendants, UIA_EditControlTypeId, UIA_ValuePatternId, UIA_ValueValuePropertyId,
     IUIAutomationTextPattern, UIA_TextPatternId, UIA_GroupControlTypeId,
+    UIA_DocumentControlTypeId,
     UIA_IsTextPatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
+    UIA_Text_TextChangedEventId,
 };
 
 thread_local! {
     static TL_AUTOMATION: RefCell<Option<IUIAutomation>> = const { RefCell::new(None) };
 }
+
+const MAX_TEXT_LEN: i32 = 4096;
 
 fn main() -> Result<()> {
     unsafe {
@@ -48,6 +53,10 @@ fn main() -> Result<()> {
     let raw_prop_handler = ManualPropertyHandler::new();
     let prop_interface: IUIAutomationPropertyChangedEventHandler =
         unsafe { std::mem::transmute(raw_prop_handler) };
+
+    let raw_text_handler = ManualTextChangedHandler::new();
+    let text_interface: IUIAutomationEventHandler =
+        unsafe { std::mem::transmute(raw_text_handler) };
 
     unsafe {
         // 注册焦点监听
@@ -95,6 +104,15 @@ fn main() -> Result<()> {
         result?; 
 
         println!("  [+] 输入内容监听已注册");
+
+        automation.AddAutomationEventHandler(
+            UIA_Text_TextChangedEventId,
+            &root,
+            TreeScope_Descendants,
+            None,
+            &text_interface,
+        )?;
+        println!("  [+] TextChanged 监听已注册");
     }
 
     println!("\n正在运行... (按 Ctrl+C 结束)");
@@ -279,7 +297,9 @@ impl ManualPropertyHandler {
                         };
 
                         let name = element.CurrentName().unwrap_or(BSTR::new());
-                        println!("    [输入监测] 控件类型: {:?}, '{}' 变更为: {}", control_type, name, current_text);
+                        if element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool() {
+                            println!("    [输入监测] 控件类型: {:?}, '{}' 变更为: {}", control_type, name, current_text);
+                        }
                     }
                 }
             }
@@ -311,7 +331,7 @@ fn get_text(element: &IUIAutomationElement) -> Result<String> {
                 // 获取整个文档范围
                 if let Ok(range) = text_pattern.DocumentRange() {
                     // -1 表示获取没有长度限制的全部文本
-                    if let Ok(bstr) = range.GetText(-1) {
+                    if let Ok(bstr) = range.GetText(MAX_TEXT_LEN) {
                         return Ok(bstr.to_string());
                     }
                 }
@@ -364,4 +384,94 @@ fn get_text_deep(element: &IUIAutomationElement) -> Result<String> {
 
         get_text(&found)
     })
+}
+
+#[repr(C)]
+struct ManualTextChangedHandler {
+    vtable: *const IUIAutomationEventHandler_Vtbl,
+    ref_count: AtomicU32,
+}
+
+impl ManualTextChangedHandler {
+    const VTABLE: IUIAutomationEventHandler_Vtbl = IUIAutomationEventHandler_Vtbl {
+        base__: IUnknown_Vtbl {
+            QueryInterface: Self::query_interface,
+            AddRef: Self::add_ref,
+            Release: Self::release,
+        },
+        HandleAutomationEvent: Self::handle_automation_event,
+    };
+
+    pub fn new() -> *mut ManualTextChangedHandler {
+        let handler = Box::new(Self {
+            vtable: &Self::VTABLE,
+            ref_count: AtomicU32::new(1),
+        });
+        Box::into_raw(handler)
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut c_void,
+        iid: *const GUID,
+        interface: *mut *mut c_void,
+    ) -> HRESULT {
+        let this = this as *mut Self;
+        unsafe {
+            if *iid == IUnknown::IID || *iid == IUIAutomationEventHandler::IID {
+                *interface = this as *mut c_void;
+                Self::add_ref(this as *mut c_void);
+                S_OK
+            } else {
+                *interface = std::ptr::null_mut();
+                E_NOINTERFACE
+            }
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
+        unsafe { (*(this as *mut Self)).ref_count.fetch_add(1, Ordering::Relaxed) + 1 }
+    }
+
+    unsafe extern "system" fn release(this: *mut c_void) -> u32 {
+        unsafe {
+            let this = this as *mut Self;
+            let count = (*this).ref_count.fetch_sub(1, Ordering::Relaxed) - 1;
+            if count == 0 {
+                let _ = Box::from_raw(this);
+            }
+            count
+        }
+    }
+
+    unsafe extern "system" fn handle_automation_event(
+        _this: *mut c_void,
+        sender: *mut c_void,
+        event_id: windows::Win32::UI::Accessibility::UIA_EVENT_ID,
+    ) -> HRESULT {
+        if event_id != UIA_Text_TextChangedEventId {
+            return S_OK;
+        }
+        unsafe {
+            if !sender.is_null() {
+                let element: &IUIAutomationElement = std::mem::transmute(&sender);
+                if !element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool() {
+                    return S_OK;
+                }
+                let control_type = element.CurrentControlType().unwrap_or_default();
+                if control_type != UIA_EditControlTypeId
+                    && control_type != UIA_DocumentControlTypeId
+                    && control_type != UIA_GroupControlTypeId
+                {
+                    return S_OK;
+                }
+                if let Ok(text) = get_text_deep(element) {
+                    if !text.is_empty() {
+                        let name = element.CurrentName().unwrap_or(BSTR::new());
+                        println!("    [输入监测] (TextChanged) {:?}, '{}' 变更为: {}", control_type, name, text);
+                    }
+                }
+            }
+        }
+        S_OK
+    }
 }
