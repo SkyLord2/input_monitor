@@ -1,8 +1,8 @@
 use std::ffi::c_void;
-use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::core::{BSTR, GUID, HRESULT, IUnknown, IUnknown_Vtbl, VARIANT, Interface};
+use windows::core::{BSTR, GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface};
+use windows::Win32::System::Variant::{VARIANT, VT_BSTR};
 use windows::Win32::Foundation::{E_NOINTERFACE, S_OK};
 use windows::Win32::UI::Accessibility::{
     IUIAutomationElement, IUIAutomationEventHandler, IUIAutomationEventHandler_Vtbl,
@@ -157,7 +157,7 @@ impl ManualPropertyHandler {
         _this: *mut c_void,
         sender: *mut c_void,
         property_id: UIA_PROPERTY_ID,
-        new_value: MaybeUninit<VARIANT>,
+        new_value: VARIANT,
     ) -> HRESULT {
         if property_id == UIA_ValueValuePropertyId && !sender.is_null() {
             unsafe {
@@ -165,8 +165,8 @@ impl ManualPropertyHandler {
 
                 if let Ok(control_type) = element.CurrentControlType() {
                     if control_type == UIA_EditControlTypeId || control_type == UIA_GroupControlTypeId {
-                        let value_ref = new_value.assume_init_ref();
-                        let val_str = value_ref.to_string();
+                        let val_str = variant_to_string(&new_value);
+                        println!("    新值: {}", val_str);
                         let current_text = if val_str.is_empty() {
                             get_text_deep(element).unwrap_or_default()
                         } else {
@@ -187,6 +187,17 @@ impl ManualPropertyHandler {
             }
         }
         S_OK
+    }
+}
+
+fn variant_to_string(value: &VARIANT) -> String {
+    unsafe {
+        let vt = value.Anonymous.Anonymous.vt;
+        if vt == VT_BSTR {
+            let bstr = &value.Anonymous.Anonymous.Anonymous.bstrVal as *const _ as *const BSTR;
+            return (&*bstr).to_string();
+        }
+        String::new()
     }
 }
 

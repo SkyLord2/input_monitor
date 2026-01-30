@@ -1,4 +1,5 @@
-use windows::core::{Interface, Result, VARIANT};
+use windows::core::{Interface, Result};
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx,
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
