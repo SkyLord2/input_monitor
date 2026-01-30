@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use windows::core::{Interface, Result, VARIANT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx,
@@ -12,11 +10,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_TextPatternId, UIA_ValuePatternId,
 };
 
-thread_local! {
-    static TL_AUTOMATION: RefCell<Option<IUIAutomation>> = const { RefCell::new(None) };
-}
-
-const MAX_TEXT_LEN: i32 = 4096;
+use crate::global::{MAX_TEXT_LEN, TL_AUTOMATION};
 
 pub fn get_text_deep(element: &IUIAutomationElement) -> Result<String> {
     let text = get_text(element)?;

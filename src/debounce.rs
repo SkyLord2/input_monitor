@@ -1,15 +1,8 @@
-use std::sync::mpsc::{self, Sender};
-use std::sync::OnceLock;
+use std::sync::mpsc::{self};
 use std::thread;
 use std::time::Duration;
 
-const DEBOUNCE_MS: u64 = 200;
-
-struct DebounceEvent {
-    message: String,
-}
-
-static DEBOUNCE_SENDER: OnceLock<Sender<DebounceEvent>> = OnceLock::new();
+use crate::global::{DEBOUNCE_MS, DEBOUNCE_SENDER, DebounceEvent};
 
 pub fn debounce_print(message: String) {
     let sender = DEBOUNCE_SENDER.get_or_init(|| {
